@@ -79,15 +79,24 @@ uint32_t num_collisions(hashset_t *hashset) {
     return total;
 }
 
-void delete_bucket(struct bucket *bucket) {
+void free_all_in_bucket(struct bucket *bucket) {
+    for (size_t i = 0; i < bucket->length; i++) {
+        free((void *)bucket->elems[i]);
+    }
+}
+
+void delete_bucket(struct bucket *bucket, bool should_free_elems) {
+    if (should_free_elems) {
+        free_all_in_bucket(bucket);
+    }
     free(bucket->elems);
     free(bucket);
 }
 
-void delete_hashset(hashset_t *hashset) {
+void delete_hashset(hashset_t *hashset, bool should_free_elems) {
     for (uint32_t i = 0; i < HASHSET_NUM_BUCKETS; i++) {
         if (hashset->buckets[i]) {
-            delete_bucket(hashset->buckets[i]);
+            delete_bucket(hashset->buckets[i], should_free_elems);
         }
     }
 }

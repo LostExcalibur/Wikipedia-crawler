@@ -1,5 +1,5 @@
 #include "queue.h"
-#include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 
 queue_t new_queue() {
@@ -22,7 +22,7 @@ void enqueue(queue_t *queue, const char *value) {
 
 const char *dequeue(queue_t *queue) {
     if (queue->length == 0) {
-        printf("No element to dequeue\n");
+        // printf("No element to dequeue\n");
         return NULL;
     }
 
@@ -39,11 +39,14 @@ const char *dequeue(queue_t *queue) {
     return tmp;
 }
 
-void delete_queue(queue_t *queue) {
+void delete_queue(queue_t *queue, bool should_free_elems) {
     struct node *current = queue->tail;
     struct node *tmp = current;
     while (current) {
         current = current->next;
+        if (should_free_elems) {
+            free((void *)tmp->data);
+        }
         free(tmp);
         tmp = current;
     }

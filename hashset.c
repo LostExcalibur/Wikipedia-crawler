@@ -68,6 +68,17 @@ bool hashset_search(hashset_t *hashset, const char *key) {
     return false;
 }
 
+uint32_t num_collisions(hashset_t *hashset) {
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < HASHSET_NUM_BUCKETS; i++) {
+        if (hashset->buckets[i]) {
+            total += hashset->buckets[i]->length - 1;
+        }
+    }
+
+    return total;
+}
+
 void delete_bucket(struct bucket *bucket) {
     free(bucket->elems);
     free(bucket);

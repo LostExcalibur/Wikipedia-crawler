@@ -20,6 +20,57 @@ myhtml_t *myhtml;
 hashset_t explored;
 queue_t to_explore;
 
+typedef struct {
+    bool print_help;
+    const char *start_url;
+    size_t steps;
+} arguments;
+
+void print_help(char *prog_name) {
+    printf("Usage : %s [OPTION]...\n", prog_name);
+    printf("Available options are :\n");
+    printf("\t--help\tPrint this help message and exit\n");
+    printf("\t-u URL\tStart from the article at addresse URL, default is "
+           "random article\n");
+    printf("\t-s N\tStop after N pages, default is 1000\n");
+    printf("\nNOTE : format for url is simply /wiki/<Article_name>\n");
+}
+
+arguments parse_arguments(int argc, char **argv) {
+    arguments args = {0};
+
+    for (int i = 1; i < argc; i++) {
+        char *arg = argv[i];
+        if (arg[0] != '-') {
+            fprintf(stderr, "Invalid option '%s'\n", arg);
+            fprintf(stderr, "Try running with --help for more information\n");
+            exit(EXIT_FAILURE);
+        }
+        if (strcmp(arg, "-u") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Option '-u' requires an argument\n");
+                fprintf(stderr,
+                        "Try running with --help for more information\n");
+                exit(EXIT_FAILURE);
+            }
+            args.start_url = argv[++i];
+        } else if (strcmp(arg, "-s") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Option '-s' requires an argument\n");
+                fprintf(stderr,
+                        "Try running with --help for more information\n");
+                exit(EXIT_FAILURE);
+            }
+            args.steps = strtoull(argv[++i], NULL, 10);
+        } else if (strcmp(arg, "--help") == 0) {
+            args.print_help = true;
+            return args; // No need to keep parsing
+        }
+    }
+
+    return args;
+}
+
 bool startswith(const char *str, const char *prefix) {
     return strncmp(str, prefix, strlen(prefix)) == 0;
 }
@@ -184,12 +235,27 @@ end1:
 }
 
 int main(int argc, char **argv) {
-    const char *article = "/wiki/Peel_(fruit)";
+    arguments arguments = parse_arguments(argc, argv);
 
-    if (argc > 1) {
-        article = argv[1];
+    if (arguments.print_help) {
+        print_help(argv[0]);
+        return EXIT_SUCCESS;
     }
-    const char *start_url = canonize(article);
+
+    const char *start_url = "/wiki/Pelure_(fruit)";
+    if (arguments.start_url) {
+        start_url = arguments.start_url;
+    }
+    start_url = canonize(start_url);
+
+    printf("Starting from url %s\n", start_url);
+
+    size_t steps = 100;
+    if (arguments.steps) {
+        steps = arguments.steps;
+    }
+
+    printf("Exploring for %zu steps\n", steps);
 
     myhtml = myhtml_create();
     myhtml_init(myhtml, MyHTML_OPTIONS_DEFAULT, 1, 0);
@@ -201,7 +267,6 @@ int main(int argc, char **argv) {
     CURL *handle = curl_easy_init();
 
     const char *url = start_url;
-    size_t steps = 100;
     // TODO : introduce some level of parallelization here
     do {
         printf("HUH\n");

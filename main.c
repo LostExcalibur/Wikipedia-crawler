@@ -2,6 +2,7 @@
 #include "queue.h"
 #include "stdio.h"
 #include <assert.h>
+#include <ctype.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
 
@@ -13,17 +14,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *url_base = "https://fr.wikipedia.org";
-static const size_t url_base_len = 24;
+static const char *url_base = "https://fr.wikipedia.org/wiki/";
+static const size_t url_base_len = 30;
 
-myhtml_t *myhtml;
-hashset_t explored;
-queue_t to_explore;
+static bool page_is_random = true;
+
+static myhtml_t *myhtml;
+static hashset_t seen;
+static queue_t to_explore;
 
 typedef struct {
     bool print_help;
     const char *start_url;
     size_t steps;
+    const char *graph_file_name;
 } arguments;
 
 void print_help(char *prog_name) {
@@ -33,7 +37,8 @@ void print_help(char *prog_name) {
     printf("\t-u URL\tStart from the article at addresse URL, default is "
            "random article\n");
     printf("\t-s N\tStop after N pages, default is 1000\n");
-    printf("\nNOTE : format for url is simply /wiki/<Article_name>\n");
+    printf("\t-g GRAPH\t write the output graph to file GRAPH\n");
+    printf("\nNOTE : format for url is simply <Article_name>\n");
 }
 
 arguments parse_arguments(int argc, char **argv) {
@@ -62,6 +67,14 @@ arguments parse_arguments(int argc, char **argv) {
                 exit(EXIT_FAILURE);
             }
             args.steps = strtoull(argv[++i], NULL, 10);
+        } else if (strcmp(arg, "-g") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Option '-g' requires an argument\n");
+                fprintf(stderr,
+                        "Try running with --help for more information\n");
+                exit(EXIT_FAILURE);
+            }
+            args.graph_file_name = argv[++i];
         } else if (strcmp(arg, "--help") == 0) {
             args.print_help = true;
             return args; // No need to keep parsing
@@ -96,9 +109,7 @@ size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp) {
     return real_size;
 }
 
-myhtml_collection_t *parse_html(receive_buffer *buffer, myhtml_tree_t *tree) {
-    myhtml_parse(tree, MyENCODING_UTF_8, buffer->data, buffer->size);
-
+myhtml_collection_t *parse_html(myhtml_tree_t *tree) {
     myhtml_collection_t *nodes = myhtml_get_nodes_by_attribute_value(
         tree, NULL, NULL, false, "id", 2, "bodyContent", strlen("bodyContent"),
         NULL);
@@ -134,25 +145,93 @@ bool should_explore(const char *link) {
     return false;
 }
 
-const char *canonize(const char *link) {
-    size_t length = strlen(link);
-    char *buffer = malloc(url_base_len + length + 1);
-
-    memcpy(buffer, url_base, url_base_len);
+const char *article_name(const char *link) {
+    const char *start = strrchr(link, '/');
+    if (!start) {
+        start = link;
+    } else {
+        start++; // Skip the '/'
+    }
+    size_t length = strlen(start);
 
     // Remove anchors to avoid duplicating links
-    char *anchor_pos = strchr(link, '#');
+    char *anchor_pos = strchr(start, '#');
     if (anchor_pos) {
-        length = anchor_pos - link;
+        length = anchor_pos - start;
     }
 
-    memcpy(buffer + url_base_len, link, length);
-    buffer[url_base_len + length] = '\0';
+    char *buffer = malloc(length + 1);
+
+    memcpy(buffer, start, length);
+    buffer[length] = '\0';
 
     return buffer;
 }
 
-void filter_and_queue_links(myhtml_collection_t *link_nodes) {
+const char *full_url(const char *link) {
+    size_t length = strlen(link);
+    char *res = malloc(length + url_base_len + 1);
+    memcpy(res, url_base, url_base_len);
+    memcpy(res + url_base_len, link, length + 1);
+
+    return res;
+}
+
+void url_decode(const char *src, char *dst) {
+    unsigned char a, b;
+    while (*src) {
+        if (*src == '%' && (a = src[1]) && (b = src[2]) && isxdigit(a) &&
+            isxdigit(b)) {
+            if (a >= 'a') {
+                a -= 'a' - 'A';
+            }
+            if (a >= 'A') {
+                a -= 'A' - 10;
+            } else {
+                a -= '0';
+            }
+            if (b >= 'a') {
+                b -= 'a' - 'A';
+            }
+            if (b >= 'A') {
+                b -= 'A' - 10;
+            } else {
+                b -= '0';
+            }
+            *dst++ // printf("%u\n", a * 16 + b);
+                = a * 16 + b;
+            src += 3;
+        } else if (*src == '+') {
+            *dst++ = ' ';
+            src++;
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst++ = '\0';
+}
+
+char *get_page_title(myhtml_tree_t *tree) {
+    myhtml_collection_t *collection =
+        myhtml_get_nodes_by_tag_id(tree, NULL, MyHTML_TAG_TITLE, NULL);
+
+    if (!collection || !collection->list || !collection->length) {
+        printf("No TITLE node\n");
+        return NULL;
+    }
+    myhtml_tree_node_t *text_node = myhtml_node_child(collection->list[0]);
+
+    if (!text_node) {
+        return NULL;
+    }
+
+    const char *text = myhtml_node_text(text_node, NULL);
+    myhtml_collection_destroy(collection);
+
+    return (char *)text;
+}
+
+void filter_links(myhtml_collection_t *link_nodes, queue_t *result) {
     for (int i = 0; link_nodes && link_nodes->list && i < link_nodes->length;
          i++) {
         myhtml_tree_node_t *link_node = link_nodes->list[i];
@@ -173,23 +252,16 @@ void filter_and_queue_links(myhtml_collection_t *link_nodes) {
         }
 
         if (should_explore(link)) {
-            const char *canonical = canonize(link);
-            if (hashset_search(&explored, canonical)) {
-                // printf("Not adding %s, already seen\n", canonical);
-                free((void *)canonical);
-            } else {
-                // printf("Adding %s to explore\n", canonical);
-                enqueue(&to_explore, canonical);
-            }
+            const char *canonical = article_name(link);
+            enqueue(result, canonical);
         }
     }
 }
 
-// TODO : actually do something when exploring a page, like saving to disk or
-// constructing a graph
-void explore(const char *link, CURL *handle) {
+void explore(const char *link, CURL *handle, FILE *graph_file) {
     receive_buffer buffer = {0};
-    printf("Exploring %s\n", link);
+    const char *full_link = full_url(link);
+    printf("Exploring %s\n", page_is_random ? "random page" : full_link);
 
     // curl_easy_setopt(handle, CURLOPT_VERBOSE, 1);
     curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1);
@@ -197,10 +269,7 @@ void explore(const char *link, CURL *handle) {
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &buffer);
 
-    curl_easy_setopt(
-        handle, CURLOPT_URL, link
-        // "https://fr.wikipedia.org/wiki/Sp%C3%A9cial:Page_au_hasard"
-    );
+    curl_easy_setopt(handle, CURLOPT_URL, full_link);
 
     CURLcode errcode = curl_easy_perform(handle);
 
@@ -209,12 +278,28 @@ void explore(const char *link, CURL *handle) {
         goto end1;
     }
 
-    hashset_insert(&explored, link);
-
     myhtml_tree_t *tree = myhtml_tree_create();
     myhtml_tree_init(tree, myhtml);
+    myhtml_parse(tree, MyENCODING_UTF_8, buffer.data, buffer.size);
 
-    myhtml_collection_t *all_link_nodes = parse_html(&buffer, tree);
+    if (page_is_random) {
+        char *page_title = get_page_title(tree);
+
+        if (!page_title) {
+            fprintf(stderr, "Count not grab page title ???\n");
+            exit(EXIT_FAILURE);
+        }
+
+        size_t length = strlen(page_title);
+        page_title[length - 15] = '\0';
+        link = page_title;
+
+        printf("Random page explored is %s\n", link);
+
+        page_is_random = false;
+    }
+
+    myhtml_collection_t *all_link_nodes = parse_html(tree);
 
     if (!all_link_nodes || !all_link_nodes->list || !all_link_nodes->length) {
         printf("Did not find any links, returning\n");
@@ -224,14 +309,33 @@ void explore(const char *link, CURL *handle) {
     // printf("Done parsing, found %zu links\n", all_link_nodes->length);
 
     size_t before = to_explore.length;
-    filter_and_queue_links(all_link_nodes);
-    printf("Need to explore %zu more links\n", to_explore.length - before);
+    queue_t new_links = new_queue();
+    filter_links(all_link_nodes, &new_links);
+
+    const char *node = dequeue(&new_links);
+    while (node) {
+        url_decode(node, (char *)node);
+        if (strcmp(node, link))
+            fprintf(graph_file, "\t\"%s\" -> \"%s\";\n", link, node);
+        if (!hashset_search(&seen, node)) {
+            // printf("Adding %s to explore\n", canonical);
+            hashset_insert(&seen, node);
+            enqueue(&to_explore, node);
+        } else {
+            free((void *)node);
+        }
+
+        node = dequeue(&new_links);
+    }
+
+    printf("Queued %zu more links to explore\n", to_explore.length - before);
 
 end2:
     myhtml_collection_destroy(all_link_nodes);
     myhtml_tree_destroy(tree);
 end1:
     free(buffer.data);
+    free((void *)full_link);
 }
 
 int main(int argc, char **argv) {
@@ -242,11 +346,11 @@ int main(int argc, char **argv) {
         return EXIT_SUCCESS;
     }
 
-    const char *start_url = "/wiki/Pelure_(fruit)";
+    const char *start_url = "Spécial:Page_au_hasard";
     if (arguments.start_url) {
+        page_is_random = strcmp(start_url, arguments.start_url) == 0;
         start_url = arguments.start_url;
     }
-    start_url = canonize(start_url);
 
     printf("Starting from url %s\n", start_url);
 
@@ -255,12 +359,20 @@ int main(int argc, char **argv) {
         steps = arguments.steps;
     }
 
+    const char *graph_file_name = "out.dot";
+    if (arguments.graph_file_name) {
+        graph_file_name = arguments.graph_file_name;
+    }
+
     printf("Exploring for %zu steps\n", steps);
+
+    FILE *graph_file = fopen(graph_file_name, "w");
+    fprintf(graph_file, "digraph {\n");
 
     myhtml = myhtml_create();
     myhtml_init(myhtml, MyHTML_OPTIONS_DEFAULT, 1, 0);
 
-    explored = new_hashset();
+    seen = new_hashset();
     to_explore = new_queue();
 
     curl_global_init(CURL_GLOBAL_ALL);
@@ -269,11 +381,13 @@ int main(int argc, char **argv) {
     const char *url = start_url;
     // TODO : introduce some level of parallelization here
     do {
-        printf("HUH\n");
-        explore(url, handle);
+        explore(url, handle, graph_file);
         url = dequeue(&to_explore);
         steps--;
     } while (url && steps > 0);
+
+    fprintf(graph_file, "}");
+    fclose(graph_file);
 
     curl_easy_cleanup(handle);
     curl_global_cleanup();
@@ -282,12 +396,10 @@ int main(int argc, char **argv) {
 
     printf("Done exploring ! We still had %zu elements to see, and had %d "
            "collisions\n",
-           to_explore.length, num_collisions(&explored));
+           to_explore.length, num_collisions(&seen));
 
-    delete_hashset(&explored, true);
-    delete_queue(&to_explore, true);
-
-    free((void *)url);
+    delete_hashset(&seen, true);
+    delete_queue(&to_explore, false);
 
     return EXIT_SUCCESS;
 }

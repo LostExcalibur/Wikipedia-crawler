@@ -6,11 +6,13 @@
 #include <string.h>
 
 uint32_t hash(const uint8_t *str) {
-    uint32_t hash = 5381;
-    uint8_t c;
-    while ((c = *str++))
-        hash = hash * 17000069 + c;
-    return hash;
+    uint32_t h = 0x12345678;
+    for (; *str; ++str) {
+        h ^= *str;
+        h *= 0x5bd1e995;
+        h ^= h >> 15;
+    }
+    return h;
 }
 
 struct bucket *new_bucket() {
@@ -78,6 +80,23 @@ uint32_t num_collisions(hashset_t *hashset) {
 
     return total;
 }
+
+void dump_hashset(hashset_t *hashset) {
+    FILE *f = fopen("dump.txt", "w");
+
+    for (uint32_t i = 0; i < HASHSET_NUM_BUCKETS; i++) {
+        struct bucket *bucket = hashset->buckets[i];
+        if (bucket) {
+            fprintf(f, "%d : ", i);
+            for (size_t i = 0; i < bucket->length; i++) {
+                fprintf(f, "%s ", bucket->elems[i]);
+            }
+            fprintf(f, "\n");
+        }
+    }
+
+    fclose(f);
+} 
 
 void free_all_in_bucket(struct bucket *bucket) {
     for (size_t i = 0; i < bucket->length; i++) {

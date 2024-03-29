@@ -10,7 +10,6 @@
 #include <myhtml/api.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -283,6 +282,10 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
     myhtml_parse(tree, MyENCODING_UTF_8, buffer.data, buffer.size);
 
     if (page_is_random) {
+        // FIXME : This method is not accurate, we get the page title as it is displayed in the browser
+        // This means that when there are spaces in the article name, there are not replaced by '_' as in links
+        // and links to this page will not appear as linking to it
+        // curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &url) should be used instead
         char *page_title = get_page_title(tree);
 
         if (!page_title) {
@@ -313,10 +316,18 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
     filter_links(all_link_nodes, &new_links);
 
     const char *node = dequeue(&new_links);
+    if (node && strcmp(node, link)) {
+        // FIXME : URL decode is not enough, we need to escape double quotes to avoid breaking
+        // the output file
+        url_decode(node, (char *)node);
+        fprintf(graph_file, "\t\"%s\" -> {\"%s\"", link, node);
+        goto first_done;
+    }
     while (node) {
         url_decode(node, (char *)node);
         if (strcmp(node, link))
-            fprintf(graph_file, "\t\"%s\" -> \"%s\";\n", link, node);
+            fprintf(graph_file, " \"%s\"", node);
+        first_done:
         if (!hashset_search(&seen, node)) {
             // printf("Adding %s to explore\n", canonical);
             hashset_insert(&seen, node);
@@ -328,6 +339,7 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
         node = dequeue(&new_links);
     }
 
+    fprintf(graph_file, "}\n");
     printf("Queued %zu more links to explore\n", to_explore.length - before);
 
 end2:

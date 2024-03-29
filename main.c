@@ -32,11 +32,11 @@ typedef struct {
 void print_help(char *prog_name) {
     printf("Usage : %s [OPTION]...\n", prog_name);
     printf("Available options are :\n");
-    printf("\t--help\tPrint this help message and exit\n");
-    printf("\t-u URL\tStart from the article at addresse URL, default is "
+    printf("\t--help\t\tPrint this help message and exit\n");
+    printf("\t-u URL\t\tStart from the article at addresse URL, default is "
            "random article\n");
-    printf("\t-s N\tStop after N pages, default is 1000\n");
-    printf("\t-g GRAPH\t write the output graph to file GRAPH\n");
+    printf("\t-s N\t\tStop after N pages, default is 1000\n");
+    printf("\t-g GRAPH\tWrite the output graph to file GRAPH\n");
     printf("\nNOTE : format for url is simply <Article_name>\n");
 }
 
@@ -77,6 +77,10 @@ arguments parse_arguments(int argc, char **argv) {
         } else if (strcmp(arg, "--help") == 0) {
             args.print_help = true;
             return args; // No need to keep parsing
+        } else {
+            fprintf(stderr, "Invalid option '%s'\n", arg);
+            fprintf(stderr, "Try running with --help for more information\n");
+            exit(EXIT_FAILURE);
         }
     }
 
@@ -294,6 +298,7 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
         }
 
         size_t length = strlen(page_title);
+        // We do this because page title is of format "article_name — Wikipédia"
         page_title[length - 15] = '\0';
         link = page_title;
 

@@ -256,7 +256,9 @@ void filter_links(myhtml_collection_t *link_nodes, queue_t *result) {
 
         if (should_explore(link)) {
             const char *canonical = article_name(link);
-            enqueue(result, canonical);
+            if (strlen(canonical) != 0) {
+                enqueue(result, canonical);
+            }
         }
     }
 }
@@ -358,7 +360,7 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
     }
     while (node) {
         sanitize((char *)node);
-        
+
         if (strcmp(node, link))
             fprintf(graph_file, " \"%s\"", node);
     first_done:

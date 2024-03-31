@@ -139,7 +139,7 @@ bool should_explore(const char *link) {
     if (startswith(link, "/w/"))
         return false;
 
-    if (startswith(link, "/wiki/")) {
+    if (startswith(link, "/wiki/") || startswith(link, url_base)) {
         if (strchr(link, ':')) {
             return false;
         }
@@ -317,23 +317,19 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
     myhtml_parse(tree, MyENCODING_UTF_8, buffer.data, buffer.size);
 
     if (page_is_random) {
-        // FIXME : This method is not accurate, we get the page title as it is
-        // displayed in the browser This means that when there are spaces in the
-        // article name, there are not replaced by '_' as in links and links to
-        // this page will not appear as linking to it curl_easy_getinfo(curl,
-        // CURLINFO_EFFECTIVE_URL, &url) should be used instead
-        char *page_title = get_page_title(tree);
+        // We get the title from the url instead of the page title as it is
+        // displayed in the browser. This is done so that when there are spaces in the
+        // article name, they appear as '_' to remain consistent with other links.
+        const char * page_title = NULL;
+        curl_easy_getinfo(handle, CURLINFO_EFFECTIVE_URL, &page_title);
+        page_title = article_name(page_title);
 
         if (!page_title) {
             fprintf(stderr, "Count not grab page title ???\n");
             exit(EXIT_FAILURE);
         }
 
-        size_t length = strlen(page_title);
-        // We do this because page title is of format "article_name — Wikipédia"
-        page_title[length - 15] = '\0';
         link = page_title;
-
         printf("Random page explored is %s\n", link);
 
         page_is_random = false;

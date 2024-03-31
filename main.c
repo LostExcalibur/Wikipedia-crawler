@@ -261,6 +261,35 @@ void filter_links(myhtml_collection_t *link_nodes, queue_t *result) {
     }
 }
 
+// src and dst cannot be the same pointer, as we write "faster" into dst than we
+// read from src
+void escape_quotes(const char *src, char *dst) {
+    while (*src) {
+        switch (*src) {
+        case '"':
+            *dst++ = '\\';
+            *dst++ = '"';
+            src++;
+            break;
+        default:
+            *dst++ = *src++;
+        }
+    }
+    *dst++ = '\0';
+}
+
+// URL decode is not enough, we need to escape double quotes to
+// avoid breaking the output file Since double quotes had to have been
+// url encoded, there is enough space allocated :
+// %22 becomes " -> we have 2 free chars, therefore inserting a \ cannot
+// overflow the allocated space
+void sanitize(char *node) {
+    url_decode(node, (char *)node);
+    char *node_copy = strdup(node);
+    escape_quotes(node_copy, (char *)node);
+    free(node_copy);
+}
+
 void explore(const char *link, CURL *handle, FILE *graph_file) {
     receive_buffer buffer = {0};
     const char *full_link = full_url(link);
@@ -286,10 +315,11 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
     myhtml_parse(tree, MyENCODING_UTF_8, buffer.data, buffer.size);
 
     if (page_is_random) {
-        // FIXME : This method is not accurate, we get the page title as it is displayed in the browser
-        // This means that when there are spaces in the article name, there are not replaced by '_' as in links
-        // and links to this page will not appear as linking to it
-        // curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &url) should be used instead
+        // FIXME : This method is not accurate, we get the page title as it is
+        // displayed in the browser This means that when there are spaces in the
+        // article name, there are not replaced by '_' as in links and links to
+        // this page will not appear as linking to it curl_easy_getinfo(curl,
+        // CURLINFO_EFFECTIVE_URL, &url) should be used instead
         char *page_title = get_page_title(tree);
 
         if (!page_title) {
@@ -322,17 +352,16 @@ void explore(const char *link, CURL *handle, FILE *graph_file) {
 
     const char *node = dequeue(&new_links);
     if (node && strcmp(node, link)) {
-        // FIXME : URL decode is not enough, we need to escape double quotes to avoid breaking
-        // the output file
-        url_decode(node, (char *)node);
+        sanitize((char *)node);
         fprintf(graph_file, "\t\"%s\" -> {\"%s\"", link, node);
         goto first_done;
     }
     while (node) {
-        url_decode(node, (char *)node);
+        sanitize((char *)node);
+        
         if (strcmp(node, link))
             fprintf(graph_file, " \"%s\"", node);
-        first_done:
+    first_done:
         if (!hashset_search(&seen, node)) {
             // printf("Adding %s to explore\n", canonical);
             hashset_insert(&seen, node);
